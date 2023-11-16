@@ -53,7 +53,9 @@
   (enter (make-instance 'vertex-entity :vertex-array (// 'trial 'grid)) scene)
   (enter (make-instance 'collision-body :name :a :primitive (make-sphere)) scene)
   (enter (make-instance 'raycast-player :name :b :location (vec 0 0 +2.5)) scene)
-  (enter (make-instance 'target-camera :location (vec3 0.0 8 9) :target (vec 0 0 0) :fov 50) scene)
+  (enter (make-instance 'target-camera :name :camera :location (vec3 0.0 8 9)
+                                       :target (vec 0 0 0) :fov 50)
+         scene)
   (observe! (hit-location (hit (node :b scene))) :title "Location")
   (observe! (hit-normal (hit (node :b scene))) :title "Normal")
   (enter (make-instance 'render-pass) scene))
@@ -69,7 +71,7 @@
                    (make-plane)
                    (make-half-space)
                    (make-triangle)
-                   (coerce-object (make-sphere) 'convex-mesh))))
+                   (coerce-object (make-box) 'convex-mesh))))
       (alloy:enter "Shape" layout :row 0 :col 1)
       (alloy:represent (physics-primitive (node :a scene)) 'alloy:combo-set
                        :value-set (shapes) :layout-parent layout :focus-parent focus)
@@ -84,4 +86,34 @@
                                                                 (reset (node :a scene))
                                                                 (reset (node :b scene)))
                                     :layout-parent layout :focus-parent focus)
+      (alloy:enter "camera" layout :row 4 :col 1)
+      (let ((row (make-instance 'alloy:horizontal-linear-layout
+                                :layout-parent layout)))
+       (flet ((c (x y z)
+                (let ((d 10))
+                  (setf (location (node :camera scene))
+                       (v* (vec3 (* d x) (* d y) (* d z)))))
+                (setf (up (node :camera scene))
+                      (if (and (= y 1) (= x 0) (= z 0))
+                          (vec3 0 0 -1)
+                          (vec3 0 1 0)))))
+         (make-instance 'alloy:button* :value "x"
+                                       :on-activate (lambda () (c 1 0 0))
+                                       :layout-parent row :focus-parent focus)
+         (make-instance 'alloy:button* :value "y"
+                                       :on-activate (lambda () (c 0 1 0))
+                                       :layout-parent row :focus-parent focus)
+         (make-instance 'alloy:button* :value "z"
+                                       :on-activate (lambda () (c 0 0 1))
+                                       :layout-parent row :focus-parent focus)
+         (make-instance 'alloy:button* :value "p"
+                                       :on-activate
+                                       (lambda ()
+                                         (setf (location (node :camera scene))
+                                               (vec3 0.0 8 9)
+                                               (up (node :camera scene))
+                                               (vec3 0 1 0))
+                                         )
+                                       :layout-parent row :focus-parent focus)))
+      
       (alloy:finish-structure panel layout focus))))
