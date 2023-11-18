@@ -103,7 +103,11 @@
                                           :physics-primitives (vector mesh))))
                  (org.shirakumo.fraf.manifolds:transform-mesh
                   (trial:vertices mesh) mat)
-                 obj)))
+                 obj))
+             (save-case (start dir type orientation &rest keys)
+               (declare (ignore start dir type orientation keys))
+               ;; todo: do something with these
+               ))
       (loop with hits = 0
             with ref-hits = 0
             with miss = 0
@@ -159,28 +163,22 @@
                          seed i err hit ref)
                  (format t "--start=~s~%  dir=~s~%  obj=~s @ ~s~%"
                          start dir otype orientation)
-                 (setf gjk-test::*ray-start* start
-                       gjk-test::*ray-dir* dir
-                       gjk-test::*test-obj* otype
-                       gjk-test::*obj-orientation* orientation)
+                 (save-case start dir otype orientation
+                            :hit hit :ref ref :in in)
             else when (alexandria:xor hit ref)
                    do (format t "~&mismatch: #x~x @ ~s~%  hit ~s~%  ref ~s~%"
                               seed i hit ref)
                       (format t "--start=~s~%  dir=~s~%  obj=~s @ ~s~%"
                               start dir otype orientation)
-                      (setf gjk-test::*ray-start* start
-                            gjk-test::*ray-dir* dir
-                            gjk-test::*test-obj* otype
-                            gjk-test::*obj-orientation* orientation)
+                      (save-case start dir otype orientation
+                                 :hit hit :ref ref :in in)
             when (and dist (> dist 0.01) (not in))
               do (format t "~&dist ~s > 0.01? #x~x @ ~s~%  hit ~s~%  ref ~s~%"
                          dist seed i hit ref)
                  (format t "--start=~s~%  dir=~s~%  obj=~s @ ~s~%"
                          start dir otype orientation)
-                 (setf gjk-test::*ray-start* start
-                       gjk-test::*ray-dir* dir
-                       gjk-test::*test-obj* otype
-                       gjk-test::*obj-orientation* orientation)
+                 (save-case start dir otype orientation
+                            :dist dist :hit hit :ref ref :in in)
             when (zerop (mod i 1000))
               do (format t "~s~%" i)
             else do (when (zerop (mod i 10)) (format t "."))
@@ -189,32 +187,50 @@
                (when ref (incf ref-hits))
                (when (and dist (not in))
                  (vector-push-extend dist distances))
-               (let ((s (gethash :steps *debug-state* 0)))
-                 (incf steps s)
-                 (incf (gethash s steps-hist 0))
-                 (when (< 60 s)
-                   (incf stuck)
-                   (format t "~&step=~s: #x~x @ ~s~%"
-                           (gethash :steps *debug-state* 0) seed i)))
+            #++
+             (let ((s (gethash :steps *debug-state* 0)))
+               (incf steps s)
+               (incf (gethash s steps-hist 0))
+               (when (< 60 s)
+                 (incf stuck)
+                 (format t "~&step=~s: #x~x @ ~s~%"
+                         (gethash :steps *debug-state* 0) seed i)))
             finally
                (format t "~&~s hits (~s ref) / ~s miss @ :seed #x~x~%"
                        hits ref-hits miss seed)
                (when ins
                  (format t "~s start in object (~s not detected)~%"
                          ins ins-no-hit))
-               (format t "~s steps total (avg ~s) | ~s stuck~%"
-                       steps (float (/ steps count)) stuck)
+               (unless (zerop steps)
+                 (format t "~s steps total (avg ~s) | ~s stuck~%"
+                         steps (float (/ steps count)) stuck))
                (format t "max dist ~s~%" (reduce 'max distances))
                (format t "mean ~s, median ~s, dev ~s, variance ~s~%"
                        (alexandria:mean distances)
                        (alexandria:median distances)
                        (alexandria:standard-deviation distances)
                        (alexandria:variance distances))
-               (format t "steps:~%~{  ~s ~s~%~}"
-                       (alexandria:alist-plist
-                        (sort (alexandria:hash-table-alist steps-hist)
-                              '< :key 'car)))))))
+               (unless (zerop (hash-table-count steps-hist))
+                 (format t "steps:~%~{  ~s ~s~%~}"
+                         (alexandria:alist-plist
+                          (sort (alexandria:hash-table-alist steps-hist)
+                                '< :key 'car))))))))
 
+;; very fast check
+#++
+(time (test-raycast 100 :start-scale 128 :seed #x12345678))
+"
+33 hits (33 ref) / 67 miss @ :seed #x12345678
+1 start in object (0 not detected)
+max dist 7.443701e-5
+mean 9.266094e-6, median 1.1832974e-6, dev 1.7844535e-5, variance 3.1842745e-10
+steps:
+Evaluation took:
+  0.028 seconds of real time
+  0.031250 seconds of total run time (0.031250 user, 0.000000 system)
+  110.71% CPU
+  114,234,991 processor cycles
+  34,639,680 bytes consed"
 ;; fairly fast check
 #++
 (time (test-raycast 10000 :start-scale 128 :seed #x12345))
