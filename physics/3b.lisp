@@ -27,6 +27,10 @@
   ;; draw to screen behind UI
 )
 
+(defparameter *debug-state* (make-hash-table))
+(defparameter *steps* 0)
+(defparameter *test-idx* 0)
+(defparameter *notes* nil)
 (defvar *result* nil)
 (defvar *obj* nil)
 (defvar *done* nil)
@@ -70,12 +74,48 @@
                        :cube)
                  (list (m:VEC3 2.971071 2.9997387 3.965216)
                        (m:VEC3 -0.528905 -0.6373113 -0.56044066)
-                       ;; 
+                       ;;
                        :sphere)
+                 (list (m:VEC3 2.5852838 -0.114477694 -0.7190808)
+                       (m:VEC3 -0.49066052 -0.30163953 0.8174753)
+                       :CYLINDER
+                       (m:QUAT -0.22332716 0.10599959 0.76245177 -0.59796023))
+                 (list (m:VEC3 47.579994 79.492386 42.75197)
+                       (m:VEC3 -0.46105966 -0.7802588 -0.42263478)
+                       :SPHERE
+                       (m:QUAT -0.64127326 -0.3427993 0.62108123 0.29243007))
+                 (list (m:VEC3 71.36629 9.424142 -101.26747)
+                       (m:VEC3 -0.5771672 -0.0684088 0.81375563)
+                       :CYLINDER
+                       (m:QUAT 0.97279584 0.18697035 -0.07385229 0.11513563))
+                 (list (m:VEC3 -11.526292 2.8096747 10.975833)
+                       (m:VEC3 0.7242905 -0.26205805 -0.63775295)
+                       :BOX (m:QUAT 0.0054854155 0.73955715 0.22828832 -0.6331742))
+                 (list (m:VEC3 1.0096693 4.379136 3.0113254)
+                       (m:VEC3 -0.17402828 -0.6926866 -0.6999281)
+                       :BOX (m:QUAT 0.27514446 0.35296905 0.87930775 0.16286898))
+                 (list (m:VEC3 -0.08129283 90.15353 55.43409)
+                       (m:VEC3 -0.001282232 -0.844984 -0.53479004)
+                       :CYLINDER (m:QUAT 0.35867596 -0.06621528 -0.69705415 0.6173188))
 ))
+;;(sb-profile:profile "ORG.SHIRAKUMO.FRAF.TRIAL.GJK")
+;;(sb-profile:report)
+;;(sb-profile:reset)
+;;(sb-profile:unprofile)
+#++
+(setf (values *ray-start* *ray-dir* *test-obj* *obj-orientation*)
+      (values-list (nth 19 *tests*)))
 
-#++(setf (values *ray-start* *ray-dir*)
-      (values-list (nth 5 *tests*)))
+#++
+(setf (values *ray-start* *ray-dir* *test-obj* *obj-orientation*)
+      (values (m:VEC3 -0.8475296 -0.514686 -2.360274)
+              (m:VEC3 0.45012274 0.52356535 0.72337323)
+              :CYLINDER  (m:QUAT 0.4119419 0.3932091 -0.8156164 0.10227609)))
+#++
+(setf (values *ray-start* *ray-dir* *test-obj* *obj-orientation*)
+      (values (m:VEC3 -0.8475296 -0.514686 -2.360274)
+              (m:VEC3 0.45012274 0.52356535 0.72337323)
+              :sphere  (m:QUAT 0.4119419 0.3932091 -0.8156164 0.10227609)))
 (defparameter *ray-start* (m:VEC3 3.059116 -3.2722962 2.4768581)
   ;(m:VEC3 3.4019854 2.2951577 -2.045888)
   ;(m:VEC3 -2.549998 0.0 1.6600008)
@@ -86,10 +126,12 @@
 (defparameter *ray-dir* (m:VEC3 -0.62525314 0.42947507 -0.6516208)
   ;(m:VEC3 -0.7396158 -0.4090528 0.5344571)
   #++(m:VEC3 1 0 0))
-(defvar *test-obj* :switch)
+(defvar *test-obj* :sphere)
+(defvar *obj-orientation* (m:quat))
 (m:vlength (m:vec3 -0.046570145 -0.6364093 0.7676495))
 (defun run (steps)
   (let* ((g::*f* t)
+         (g::*debug-state* *debug-state*)
          ;; so debug prints don't have package prefixes
          (*package* (find-package '#:g))
          (g::*steps* steps)
@@ -105,13 +147,16 @@
                              :name :foo
                              :physics-primitives (vector mesh)
                              )))
+    (org.shirakumo.fraf.manifolds:transform-mesh
+     (trial:vertices mesh) (m:qmat *obj-orientation*))
     (multiple-value-bind (r e) (catch :step
                                  (ignore-errors (trial:detect-hit ray obj)))
       (let ((g::*f* nil))
         (setf (values *ref* *ref-normal*)
               (ignore-errors
                (g::ref *ray-start* *ray-dir*
-                       (aref (trial:physics-primitives obj) 0)))))
+                           (aref (trial:physics-primitives obj) 0))))
+)
       (format t "~s~%~s~%" r e )
       (setf *done* (or e (not (eql r :step) )))
       (setf *result* (or e r))
@@ -126,7 +171,8 @@
 
 (defparameter *zoom* 380)
 (Defun draw-object ()
-  (let ((s *zoom*))
+  (let ((s *zoom*)
+        (g::*debug-state* *debug-state*))
     (labels ((d (k) (when g::*debug-state*
                       (gethash k g::*debug-state*)))
              (v (x y z)
@@ -219,13 +265,19 @@
               (u:color 0 0 1 1)
               (u:vertex 0 0 0)
               (vp (d :vr)))
-            (u:color 0 1 0 1)
-            (vp (d :rl))
-            (u:color 0 1 1 1)
-            (vp (m:v+ (d :rl) (d :rd)))
-            (u:color 0.3 0.1 0.4 0.3)
-            (vp (m:v+ (d :rl) (d :rd)))
-            (vp (m:v+ (d :rl) (m:v* (d :rd) 100)))
+            (when (and (d :rl) (d :rd))
+              (u:color 0 1 0 1)
+              (vp (d :rl))
+              (u:color 0 1 1 1)
+              (vp (m:v+ (d :rl) (d :rd)))
+
+              (u:color 0 0 1 1)
+              (vp (d :rl1))
+              (u:color 0.5 0 1 1)
+              (vp (m:v+ (d :rl1) (d :rd)))
+              (u:color 0.3 0.1 0.4 0.3)
+              (vp (m:v+ (d :rl) (d :rd)))
+              (vp (m:v+ (d :rl) (m:v* (d :rd) 1000))))
             (when b
               (u:color 1 1 0 1)
               (vp a) (vp b)
@@ -269,14 +321,15 @@
 (defvar *auto-misses* 0)
 (defvar *auto-distances* ())
 
+#++
 (list* "MAX" (reduce 'max *auto-distances*)
        (loop for i in '(a:median a:mean a:standard-deviation a:variance)
              collect (symbol-name i) collect (funcall i *auto-distances*)))
-("MAX" 0.0011915698 "MEDIAN" 3.3717478e-7 "MEAN" 3.349292e-6
+#++("MAX" 0.0011915698 "MEDIAN" 3.3717478e-7 "MEAN" 3.349292e-6
  "STANDARD-DEVIATION" 2.5538819e-5 "VARIANCE" 6.522312e-10)
-("MAX" 6.0666306e-4 "MEDIAN" 3.3717478e-7 "MEAN" 3.411214e-6
+#++("MAX" 6.0666306e-4 "MEDIAN" 3.3717478e-7 "MEAN" 3.411214e-6
  "STANDARD-DEVIATION" 2.2784705e-5 "VARIANCE" 5.191428e-10)
-("MAX" 5.483376e-4 "MEDIAN" 3.5762787e-7 "MEAN" 3.435022e-6 "STANDARD-DEVIATION" 2.7118425e-5 "VARIANCE" 7.35409e-10)
+#++("MAX" 5.483376e-4 "MEDIAN" 3.5762787e-7 "MEAN" 3.435022e-6 "STANDARD-DEVIATION" 2.7118425e-5 "VARIANCE" 7.35409e-10)
 #++
 ("MAX" 0.0055737784 "MEDIAN" 4.1295309e-7 "MEAN" 1.3124563e-4
  "STANDARD-DEVIATION" 5.6849327e-4 "VARIANCE" 3.231846e-7)
@@ -289,6 +342,7 @@
        (setf (values *ray-start* *ray-dir*)
              (values-list (nth n *tests*))
              *test-obj* (or (third (nth n *tests*)) :sphere)))
+  (setf *obj-orientation* (m:quat))
   (if *random-queue*
       (setf (values *ray-start* *ray-dir* *test-obj*)
             (values-list (pop *random-queue*)))
@@ -323,7 +377,7 @@
   (labels ((dt ()
              (- now *auto-time*))
            (add-case (&rest r &key ref gjk d steps)
-             (declare (ignore ref gjk))
+             (declare (ignore ref gjk d steps))
              (push (list* *ray-start* *ray-dir* *test-obj* r)
                    *auto-errors*))
            (l (&rest r)
@@ -368,7 +422,7 @@
                    ((eql r :step)
                     ;; do nothing
                     )
-                   (t
+                   (t 
                     (ecase *auto-state*
                       (:try
                        (if (> (gethash :steps g::*debug-state* 0) 2)
@@ -479,13 +533,9 @@
                        (u:vertex (* i s) w z)
                        (u:vertex (- w) (* i s) z)
                        (u:vertex w (* i s) z)))))))))
-(m:unproject )
 
 (defparameter *then* 0)
 (defparameter *slow* nil)
-(defparameter *steps* 0)
-(defparameter *test-idx* 0)
-(defparameter *notes* nil)
 
 (defmethod u:draw-ui ((w foo) now)
   (u:row

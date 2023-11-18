@@ -1,10 +1,125 @@
+;;; brute-force ray / convex-mesh intersection test, just for
+;;; testing.
+(in-package #:org.shirakumo.fraf.trial.gjk)
+
+(defun map-convex-mesh-faces (|(f v1 v2 v3)| primitive)
+  (let ((verts (trial:convex-mesh-vertices primitive))
+        (faces (trial:convex-mesh-faces primitive))
+        (v1 (vec3))
+        (v2 (vec3))
+        (v3 (vec3)))
+    (declare (dynamic-extent v1 v2 v3))
+    (loop for f from 0 below (length faces) by 3
+          do (flet ((vert (v i)
+                      (let ((i (* 3 i)))
+                        (vsetf v
+                               (aref verts (+ i 0))
+                               (aref verts (+ i 1))
+                               (aref verts (+ i 2))))
+                      v))
+               (funcall |(f v1 v2 v3)|
+                        (vert v1 (aref faces (+ f 0)))
+                        (vert v2 (aref faces (+ f 1)))
+                        (vert v3 (aref faces (+ f 2))))))))
+
+(defun ref (ray-start ray-dir o)
+  (let* ((d most-positive-single-float) ;; closest tₙ seen so far
+         (p (vec3))
+         (n (vec3))
+         (found nil)
+         (ϵ 0.0001)
+         (ϵ² (expt ϵ 2)))
+    (v "ref ~s~%   + ~s~%" ray-start ray-dir)
+    (map-convex-mesh-faces
+     (lambda (a b c)
+       (let* ((ab (v- b a))
+              (ac (v- c a))
+              (ab×ac (vc ab ac))
+              (-rd (v- ray-dir))
+              (det (v. -rd ab×ac))
+              (as (v- ray-start a))
+              (t₁ (v. ab×ac as))
+              ;;(t₂ (v. (vc ac -rd) ap))
+              ;;(t₃ (v. (vc -rd ab) ap))
+              )
+         (v "test ~s,~s,~s~%" a b c)
+         (v "  det = ~s, t₁ = ~s (~s)~%"
+            det t₁ (unless (zerop det) (/ t₁ det)))
+         (cond
+           ;; ray is (almost) parallel to or on plane of triangle, test edges
+           ((< (abs det) ϵ)
+            (when (< (abs t₁) ϵ) ;; distance from ray-start to plane
+              (flet ((edge (a ab)
+                       (v "  edge ~s - ~s~%" a ab)
+                       (let* ((as (v- ray-dir ab))
+                              (n₁ (vc ray-dir ab))
+                              (n₂ (vc ab n))
+                              ;; line 1 = ray-start + t₁*ray-dir/d₁
+                              (t₁ (v. as n₂))
+                              (d₁ (v. ray-dir n₂))
+                              ;; line 2 = a + t₂*ab/d₂
+                              (t₂ (- (v. as n₁)))
+                              (d₂ (v. ab n₁)))
+                         (when (and
+                                ;; lines are not parallel
+                                (> (abs d₁) ϵ)
+                                (> (abs d₂) ϵ)
+                                ;; closest point is in ray
+                                (> t₁ (- ϵ))
+                                ;; and in edge
+                                (> (1+ ϵ) t₂ (- ϵ)))
+                           (let* ((t₁/d₁ (/ t₁ d₁))
+                                  (p₁ (v+* ray-start ray-dir t₁/d₁))
+                                  (p₂ (v+* a ab (/ t₂ d₂))))
+                             (when (and
+                                    ;;points are (nearly) same point
+                                    (< (vsqrdistance p₁ p₂) ϵ²)
+                                    ;; and closest point so far
+                                    (< t₁/d₁ d))
+                               (v "!!~%")
+                               (setf found t
+                                     d t₁/d₁)
+                               (v<- p p₁)
+                               (!vc n (!vc n ab ray-dir) ab)))))))
+                (edge a ab)
+                (edge a ac)
+                (edge b (v- c b)))))
+           ;; ray intersects plane at ray-start + t₁*ray-dir
+           ((< 0 (setf t₁ (/ t₁ det)))
+            (let* ((p₀ (v+* ray-start ray-dir t₁))
+                   (ap (v- p₀ a))
+                   (l (vsqrlength ab×ac))
+                   (λ₂ (/ (v. (vc ap ac) ab×ac) l))
+                   (λ₃ (/ (v. (vc ab ap) ab×ac) l)))
+              (v "tri λ=~s, ~s (~s) t₁=~s~% p₀=~s~% n=~s~% ap=~s~%"
+                 λ₂ λ₃ (+ λ₂ λ₃) t₁
+                 p₀ n ap)
+              ;; test if point is in triangle
+              (when (and (< (- ϵ) λ₂ (1+ ϵ))
+                         (< (- ϵ) λ₃ (1+ ϵ))
+                         (< (+ λ₂ λ₃) (1+ ϵ)))
+                (when (< t₁ d)
+                  (v "!! @ ~s=~s n ~s~%" t₁ p₀ ab×ac)
+                  (setf found t
+                        d t₁)
+                  (v<- p p₀)
+                  (v<- n ab×ac)))))
+           ;; intersects plane behind ray
+           (t))))
+     o)
+    (when found
+      (values p (nvunit n)))))
+
+
+;; todo: finish full rational implementation if possible?
+
 (defun rat-line-plane (rs rd pn p0)
   ;; line p=rs+t*rd, plane (p-p₀)*n=0
   (flet ((rat (x) (rational x)))
     (let* ((l0 (map 'vector #'rat rs))
            (l (map 'vector #'rat rd))
            (n (map 'vector #'rat pn))
-                                        ;(dl (print (reduce '+ (map 'vector (alexandria:rcurry 'expt 2) n))))
+           ;;(dl (print (reduce '+ (map 'vector (alexandria:rcurry 'expt 2) n))))
            (p0 (map 'vector #'rat p0))
            (l⋅n (reduce '+ (map 'vector '* l n)))
            (p0-l0 (map 'vector '- p0 l0))
@@ -15,27 +130,6 @@
                 (map 'vector '+ l0 (map 'vector (alexandria:curry '* d) l)))))
       (values (map 'vector 'float r) r))))
 
-
-(rat-line-plane #(3.1813586 2.4607022 3.5005364)
-                #(-0.5803402 -0.6600952 -0.4769482)
-                #(0 0 1)
-                #(0 0 1))
-#(0.13876018 -1.0000345 1.0)
-#(4657103149925/33562245988352 -33563404127421/33562245988352 1)
-#(-2.2947965 -3.76803 -1.0)
-#(-77018519921819/33562245988352 -126463546739901/33562245988352 -1)
-
-#(0.13879052 -1.0 1.0000249)
-#(6446829253759/46450071306240 -1 46451229445309/46450071306240)
-#(0.13879089 -1.0 1.000025)
-#(70489005004919/507879164810415 -1 27878184449325/27877485553352)
-#(0.13879052 -1.0 1.0000249)
-#(6446829253759/46450071306240 -1 46451229445309/46450071306240)
-(cos (/ pi 16))
-0.9807852804032304d0
-0.9987954562051724d0
-0.049126849769467254d0
-0.049067674327418015d0
 
 (defun rat-point-line (rs rd p0)
   ;; line p=rs+t*rd, point p0
@@ -55,11 +149,3 @@
                                  (map 'vector '- p1 p))))))
       (values (sqrt d²) (float d²) d²
               (map 'vector 'float p1)))))
-
-(rat-point-line #(2.971071 2.9997387 3.965216)
-                #(-0.528905 -0.6373113 -0.56044066)
-                #(0 0 0))
-0.9982341
-0.9964713
-4934286041137922652266783723/4951759524220230983363854336
-#(-0.046570145 -0.6364093 0.7676495)
