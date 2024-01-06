@@ -5,7 +5,6 @@
   (:use #:cl #:org.shirakumo.fraf.math)
   (:import-from #:org.shirakumo.fraf.trial.gjk
                 #:point #:point-a #:point-b #:p<-
-                ;; #:plane-normal
                 #:barycentric
                 #:search-point
                 ;; from gjk-raycast
@@ -41,7 +40,7 @@
   ;; directions and collecting all the distinct support points
   (let* ((r (make-hash-table :test 'equalp))
          (p (point)))
-    (flet ((R () (- (random 2.0) 1.0)))
+    (flet ((r () (- (random 2.0) 1.0)))
       (loop repeat 4000
             do (setf (gethash (copy-seq
                                (varr (search-point p (vec3 (r) (r) (r)) a b)))
@@ -92,7 +91,7 @@
                         (vectors (alexandria:last-elt (steps *trace*))))))
 
 (defun update-simplex (dim s0 s1 s2 s3 dir tootbird best)
-  ;; return new-dim, done-flag, new-best
+  ;; returns (values new-dim done-flag new-best)
   (declare (type point s0 s1 s2 s3)
            (type vec3 dir tootbird)
            (type single-float best)
@@ -112,23 +111,26 @@
           (format t "d = ~s ~%" d)
           (trace-point n)
           (trace-line (vec3 0 0 0) n)))
-      ;; If negative, origin is outside Minkowski difference, and we are
-      ;; done (unless we want to find closest point, in which case
-      ;; keep going or switch to)
+      ;; If negative, origin is outside Minkowski difference, and we
+      ;; are done (unless we want to find closest point, in which case
+      ;; keep going, possibly switching to seeking origin instead of
+      ;; tootbird. Neither seems to work with current termination
+      ;; tests though, so just exit for now.)
       (cond
         ((minusp d)
          (when *trace*
-           (format t "d = ~s done~%" d))
+           (format t "d = ~s done1~%" d))
          (return-from update-simplex (values dim -1 d)))
-        #++((minusp d)
-            ;; if we are finding closest point in non-intersecting, just
-            ;; move tootbird to origin and set 'best' to 0 so we stop
-            ;; checking it
-            (vzero tootbird)
-            (setf best 0.0))
+        #++
+        ((minusp d)
+         ;; if we are finding closest point in non-intersecting case,
+         ;; move tootbird to origin and set 'best' to 0 so we stop
+         ;; checking it.
+         (vzero tootbird)
+         (setf best 0.0))
         ;; if distance is 0, new tootbird is the new point, which is on
         ;; surface of Minkowski difference, so we are done
-        ((< (abs d) (expt sttb-tolerance 2))
+        ((< (abs d) (expt STTB-TOLERANCE 2))
          (when (Zerop dim) ;; make sure we have some result
            (p<- s1 s0)
            (setf dim 1))
@@ -146,8 +148,6 @@
     (0
      (p<- s1 s0)
      (setf dim 1))
-    ;; not sure if we need to preserve order when extending simplex
-    ;; like gjk? for now trying without.
     (1
      (when (and (zerop best) (v~= s0 s1))
        ;; got same point twice in a row while searching for origin, we
@@ -179,37 +179,33 @@
        (cond
          ;; if new point is too close to one of the old ones, just
          ;; replace that one
-         (#++(< (vsqrlength an) 0.0000001)
-          (= (vsqrlength an) 0.0)
+         ((= (vsqrlength an) 0.0)
           (when *trace* (format t "*an ~a~% bn ~a~% cn ~a~%" an bn cn))
           ;; if we see a duplicate while in no-intersection mode, we
           ;; probably won't make any more progress, so return current
           ;; simplex as nearest contact
           (when (zerop best)
-            (when *trace* (format t " best=0, done?~%"))
+            (when *trace* (format t " best=0, done3a?~%"))
             (return-from update-simplex
               (values dim -1 best)))
           (p<- s1 s0))
-         (#++(< (vsqrlength bn) 0.0000001)
-          (= (vsqrlength bn) 0.0)
+         ((= (vsqrlength bn) 0.0)
           (when *trace* (format t " an ~a~%*bn ~a~% cn ~a~%" an bn cn))
           (when (zerop best)
-            (when *trace* (format t " best=0, done?~%"))
+            (when *trace* (format t " best=0, done3b?~%"))
             (return-from update-simplex
               (values dim -1 best)))
           (p<- s2 s0))
-         (#++(< (vsqrlength cn) 0.0000001)
-          (= (vsqrlength cn) 0.0)
+         ((= (vsqrlength cn) 0.0)
           (when *trace* (format t " an ~a~% bn ~a~%*cn ~a~%" an bn cn))
           (when (zerop best)
-            (when *trace* (format t " best=0, done?~%"))
+            (when *trace* (format t " best=0, done3c?~%"))
             (return-from update-simplex
               (values dim -1 best)))
           (p<- s3 s0))
          ;; otherwise do plane tests to decide which to keep
          (T
           (!vc n ac ab)
-          ;;(setf l^2 (vsqrlength n))
           ;; calculate normals of plane perpendicular to old plane, and
           ;; through new point and one of old points
           (nvc an n)
@@ -220,7 +216,6 @@
           (let* ((da (v. tn an))
                  (db (v. tn bn))
                  (dc (v. tn cn))
-                                        ;(z (or (zerop da) (zerop db) (zerop dc)))
                  (f (logior (if (plusp da) 1 0)
                             (if (plusp db) 2 0)
                             (if (plusp dc) 4 0))))
@@ -233,26 +228,10 @@
                (p<- s1 s0))
               ((#b100 #b110) ;; in front of c, behind a, replace b
                (p<- s2 s0))
-              #++
-              (#b000 ;; in front of all, replace largest (= closest to 0)
-               (p<- s3 s0)
-               #++
-               (if (> da db)
-                   (if (> dc da)
-                       (p<- s3 s0)
-                       (p<- s1 s0))
-                   (if (> db dc)
-                       (if (> da db)
-                           (p<- s1 s0)
-                           (p<- s2 s0))
-                       (p<- s3 s0))))
-              ((#b000 #b111) ;; behind all, replace smallest possibly
-               ;; could skip check and always pick C if tootbird
-               ;; didn't move?
-               #++
-               (when (and (= f 0)
-                          (or (< da dc) (< db dc)))
-                 (break "0"))
+              ;; ambiguous, pick smallest. Original just picked a
+              ;; specific point in this case, but this seems to work a
+              ;; bit better?
+              ((#b000 #b111)
                (if (< da db)
                    (if (< dc da)
                        (p<- s3 s0)
@@ -261,18 +240,7 @@
                        (if (< da dc)
                            (p<- s1 s0)
                            (p<- s2 s0))
-                       (p<- s3 s0))))
-              #++
-              (#b111 ;; behind all, replace a
-               (when *trace*
-                 (format t " n=~a~% an=~a~% bn=~a~% cn=~a~% tn=~a~%"
-                         n an bn cn tn)
-                 (trace-line s1 (v- s1 an))
-                 (trace-line s2 (v- s2 bn))
-                 (trace-line s3 (v- s3 cn))
-                 (trace-line s1 (v- s1 n))
-                 (trace-line tootbird (v- tootbird tn)))
-               (p<- s1 s0)))))))))
+                       (p<- s3 s0)))))))))))
 
   (step-trace dim s1 s2 s3)
   (trace-point tootbird)
@@ -290,8 +258,7 @@
                 (v<- dir a)
                 1)
                (T
-                (let* ((t0 (/ (v. m dt)
-                              mm)))
+                (let* ((t0 (/ (v. m dt) mm)))
                   (cond
                     ((<= t0 0)
                      (v<- dir a)
@@ -313,7 +280,6 @@
       (3
        (let* ((ab (v- s2 s1))
               (ac (v- s3 s1))
-              (bc (v- s3 s2))
               (at (v- tootbird s1))
               (n (vec3))
               (l^2 0.0)
@@ -322,11 +288,11 @@
               (j -1)
               (flat NIL)
               (epsilon 0.00001))
-         (declare (dynamic-extent ab ac bc at n p0)
+         (declare (dynamic-extent ab ac at n p0)
                   (type single-float umax))
          (!vc n ac ab)
          (setf l^2 (vsqrlength n))
-         ;; project tootbird onto plane (if possible)
+         ;; project tootbird onto plane of simplex (if possible)
          (cond
            ((< l^2 (expt epsilon 2))
             (setf flat T))
@@ -370,7 +336,6 @@
                                  (v<- best-dir cdir)
                                  (p<- b0 c0)
                                  (when (> r 1) (p<- b1 c1)))))
-                    #++(break "test this")
                     ;; should always find a solution
                     (assert (/= d MOST-POSITIVE-SINGLE-FLOAT))
                     ;; copy results to output
@@ -381,105 +346,6 @@
            (cond
              (flat
               (flat))
-             #++
-             (T
-              ;; otherwise pick axis-aligned plane with largest projection
-              (loop for i below 3
-                    for u of-type single-float = (projected-cross ab ac i)
-                    when *trace* do (format t "i=~s,u=~s~%" i u)
-                      when (> (abs u) (abs umax))
-                        do (setf umax u
-                                 j i))
-              (setf flat (< (abs umax) epsilon))
-                                        ;(assert (not flat))
-              (when *trace*
-                (format t "j=~s,umax=~s,flat~s~%"
-                        j umax flat))
-              ;; calculate barycentric coordinates on that plane (seems slightly
-              ;; more accurate than calling BARYCENTRIC, and not sure that
-              ;; handles points outside the triangle the way we want?
-              (let* ((ap (v- p0 s1))
-                     (pb (v- s2 p0))
-                     (pc (v- s3 p0))
-                     (sabc (projected-cross ab ac j))
-                     (s (if (minusp sabc) -1 1))
-                     (abc (abs sabc))
-                     (t1 (* 1 (projected-cross pb pc j)))
-                     (n1 (<= t1 0))
-                     (t2 (* s (projected-cross ap ac j)))
-                     (n2 (<= t2 0))
-                     (t3 (* s (projected-cross ab ap j)))
-                     (n3 (<= t3 0))
-                     (out (+ (if n1 1 0) (if n2 1 0) (if n3 1 0))))
-                (declare (dynamic-extent ap pb pc))
-                (when *trace*
-                  (format t " ab=~a~% ac=~a~% pa=~a~% pb=~a~% pc=~a~%"
-                          ab ac ap pb pc)
-                  (format t "out=~s,t=~s,~s,~s,sabc=~s~%"
-                          out t1 t2 t3 sabc)
-                  (format t "= ~a,~a,~a = ~a~%"
-                          (/ t1 abc) (/ t2 abc) (/ t3 abc)
-                          (+ (/ t1 abc) (/ t2 abc) (/ t3 abc)))
-                  (!v* dir s1 (/ t1 abc))
-                  (!v+* dir dir s2 (/ t2 abc))
-                  (!v+* dir dir s3 (/ t3 abc))
-                  (trace-point dir)
-                  (flet ((pro (v x)
-                           (ecase x
-                             (0 (vec3 0 (vy v) (vz v)))
-                             (1 (vec3 (vx v) 0 (vz v)))
-                             (2 (vec3 (vx v) (vy v) 0)))))
-                    (trace-line (pro s1 j) (pro s2 j))
-                    (trace-line (pro s2 j) (pro s3 j))
-                    (trace-line (pro s3 j) (pro s1 j))
-                    (trace-point (pro p0 j))
-                    (trace-line (pro s1 j) (pro p0 j))
-                    (trace-point (pro s1 j))
-                    (trace-point (pro s2 j))))
-                (cond
-                  ;; support is entire triangle
-                  ((and (zerop out)
-                        (< t1 abc)
-                        (< t2 abc)
-                        (< t3 abc))
-                   ;; possibly should recalculate one of the coords from the
-                   ;; other 2, but not sure which.
-                   (!v* dir s1 (/ t1 abc))
-                   (!v+* dir dir s2 (/ t2 abc))
-                   (!v+* dir dir s3 (/ t3 abc))
-                   3)
-                  ((= out 1)
-                   (setf dim 2)
-                   (when *trace* (format t "n* = ~s ~s ~s~%" n1 n2 n3))
-                   ;; support is line opposite negative λ
-                   (flet ((edge (a b m)
-                            (let* ((an (v- p0 a))
-                                   (t0 (/ (v. m an)
-                                          (v. m m))))
-                              (declare (dynamic-extent an t0))
-                              (!v+* dir a m t0)
-                              (when *trace*
-                                (format t " a=~a~% b=~a~% m=~a~% an=~a~% t0=~a~% =>~a~%"
-                                        a b m an t0 dir)))
-                            (p<- s2 b)
-                            (p<- s1 a)))
-                     (cond
-                       (n1 (edge s2 s3 bc))
-                       (n2 (edge s1 s3 ac))
-                       (n3 (edge s1 s2 ab)))))
-                  ((= out 2)
-                   (setf dim 1)
-                   ;; support is point with positive λ
-                   (cond
-                     ((not n1)
-                      (v<- dir s1))
-                     ((not n2)
-                      (v<- dir s2)
-                      (p<- s1 s2))
-                     ((not n3)
-                      (v<- dir s3)
-                      (p<- s1 s3))))
-                  (T (error "shouldn't get here?")))))
              (T
               ;; otherwise pick axis-aligned plane with largest projection
               (loop for i below 3
@@ -490,12 +356,11 @@
                       when (> (abs u) (abs umax))
                         do (setf umax u
                                  j i))
-              #++(when (< (abs umax) 0.0000001)
-                   (break "flat ~s~%" umax))
               (when *trace*
                 (format t "j=~s,umax=~s,flat~s~%"
                         j umax flat))
-              ;;
+              ;; and project simplex and point onto that plane, and
+              ;; find the support
               (flet ((projected-cross (a b x)
                        (macrolet ((c (x y)
                                     `(- (* (,x a) (,y b))
@@ -567,38 +432,31 @@
                   (< dist d 1e-4)))))
     (cond
       ;; if tootbird is on simplex, we are done, and simplex is
-      ;; face/edge/point of difference closest to origin
+      ;; face/edge/point of difference (locally) closest to origin
       ((and
         ;; coarse test against fixed distance
         (< dist 1e-4)
         ;; then test against epsilon based on size of simplex
         (< dist (* 2 short-float-epsilon
-                   (loop for i below dim
-                         maximize (ecase i
-                                    (0 (vinorm s1))
-                                    (1 (vinorm s2))
-                                    (2 (vinorm s3)))))))
-
-       ;; if tootbird is on simplex, we are done? (simplex must be on
-       ;; surface of minkowski difference by construction of tootbird,
-       ;; and also must be in same plane we checked earlier so we know
-       ;; origin is inside the difference)\
+                   (ecase dim
+                     (1 (vinorm s1))
+                     (2 (+ (vinorm s1) (vinorm s2)))
+                     (3 (+ (vinorm s1) (vinorm s2) (vinorm s3)))))))
        (when *trace* (format t "done ~s < ~s~%"
                              (vsqrdistance dir tootbird)
-                             (expt sttb-tolerance 2)))
+                             (expt STTB-TOLERANCE 2)))
        (values dim 1 best))
       (T
        ;; otherwise update dir as direction from closest point to
        ;; tootbird
-       (trace-line tootbird dir)
+       (when *trace* (trace-line tootbird dir))
        (!v- dir tootbird dir)
        (nvunit dir)
-       (trace-line (vec3 0) dir)
+       (when *trace* (trace-line (vec3 0) dir))
        ;; return new simplex size and that we aren't done
        (values dim 0 best)))))
 
 (defun %sttb (a b hit)
-                                        ;(break "~a" (list a b))
   (when *trace* (setf *trace* (start-trace a b)))
   (let ((s0 (point))
         (s1 (point))
@@ -613,9 +471,9 @@
              (type (unsigned-byte 2) dim)
              (type (signed-byte 2) ret)
              (optimize speed))
-    ;; paper suggest "direction from center of Minkowski difference to
-    ;; origin" as first direction, so approximate that with difference
-    ;; of centers
+    ;; website suggests "direction from center of Minkowski difference
+    ;; to origin" as first direction, so approximate that with
+    ;; difference of centers
     (trial:global-location a dir)
     (trial:global-location b s0)
     (when *trace*
@@ -624,8 +482,7 @@
     (nvunit dir)
     (when *trace* (format t "dir = ~a~%" dir))
     (when (v~= dir 0.0)
-      ;; todo: figure out if dir=0 here means we found a collision
-      ;; already?
+      ;; no initial guess for best direction, just pick something
       (v<- dir +vx3+))
     (loop for i below STTB-ITERATIONS
           do (search-point s0 dir a b)
@@ -635,101 +492,107 @@
                      for x in (list s1 s2 s3)
                      do (format t "  ~a~%" x))
                (format t " add ~a~%" s0))
-             ;; todo: possibly check for finding point already in
-             ;; simplex without moving tootbird (and either exit, or
-             ;; switch to gjk-style based on origin for at least a
-             ;; step or 2?)
              (setf (values dim ret best-distance)
                    (update-simplex dim s0 s1 s2 s3
                                    dir tootbird
                                    best-distance))
              (when *trace*
                (format t "got ~s ~s ~s~% @ ~a~%" dim ret best-distance tootbird))
-          #++(setf dim (update-simplex dim s0 s1 s2 s3 dir))
-          #++(setf ret (update-tootbird dim s0 s1 s2 tootbird))
           while (zerop ret))
-    (when (plusp ret)
-      (let ((b-point (vec3))
-            (a-point (vec3))
-            (p (vec3))
-            (foo 0))
-        (declare (dynamic-extent a-point b-point p))
-        ;; calculate hit location from tootbird and simplex
-        (ecase dim
-          (1
-           (setf foo 1)
-           (v<- a-point (point-a s1))
-           (v<- b-point (point-b s1)))
-          (2
-           (let* ((ds (v- s2 s1))
-                  (dt (v- tootbird s1))
-                  (l (vsqrlength ds)))
-             (declare (dynamic-extent ds dt))
-             (cond
-               ((< l 0.00001)
-                (setf foo 2)
-                ;; simplex is small, just use the midpoint
-                (!v+ ds (point-a s2) (point-a s1))
-                (!v* a-point ds 0.5)
-                (!v+ ds (point-b s2) (point-b s1))
-                (!v* b-point ds 0.5))
-               (T
-                (setf foo 3)
-                (setf l (/ (v. ds dt) l))
-                (!v- ds (point-a s2) (point-a s1))
-                (!v+* a-point (point-a s1) ds l)
-                (!v- ds (point-b s2) (point-b s1))
-                (!v+* b-point (point-b s1) ds l)))))
-          (3
-           (when *trace*
-             (format t "done3:~%  ~a~%  ~a~%  ~a~% ~a~%"
-                     s1 s2 s3 tootbird))
+
+    (let ((b-point (vec3))
+          (a-point (vec3))
+          (p (vec3)))
+      (declare (dynamic-extent a-point b-point p))
+      ;; calculate hit location from tootbird and simplex
+      (ecase dim
+        (0
+         (v<- a-point (point-a s0))
+         (v<- b-point (point-b s0)))
+        (1
+         (v<- a-point (point-a s1))
+         (v<- b-point (point-b s1)))
+        (2
+         (let* ((ds (v- s2 s1))
+                (dt (v- tootbird s1))
+                (l (vsqrlength ds)))
+           (declare (dynamic-extent ds dt))
            (cond
-             ((barycentric s1 s2 s3
-                           ;; not sure if this should be looking for
-                           ;; point close to tootbird or origin?
-                           #++ tootbird (vec3)
-                           p)
-              (setf foo 4)
-              (unless (< 0.95 (+ (vx p) (vy p) (vz p)) 1.05)
-                (break "? ~s" p))
-              (nv+* a-point (point-a s1) (vx p))
-              (nv+* a-point (point-a s2) (vy p))
-              (nv+* a-point (point-a s3) (vz p))
-              (nv+* b-point (point-b s1) (vx p))
-              (nv+* b-point (point-b s2) (vy p))
-              (nv+* b-point (point-b s3) (vz p)))
-             ;; barycentric failed, just average the points
+             ((< l 0.000001)
+              ;; simplex is small, use the midpoint of smaller edge
+              ;; on original shapes as hit location, and tootbird as
+              ;; normal
+              (let ((p1 (+ (vsqrdistance (point-a s1) (point-a s2))))
+                    (p2 (+ (vsqrdistance (point-b s1) (point-b s2)))))
+                (cond
+                  ((<= p1 p2)
+                   (!v+ a-point (point-a s1) (point-a s2))
+                   (nv* a-point 0.5f0)
+                   (!v+ b-point a-point tootbird))
+                  (T
+                   (!v+ b-point (point-b s1) (point-b s2))
+                   (nv* b-point 0.5f0)
+                   (!v- a-point b-point tootbird)))))
              (T
-              (setf foo 5)
-              #++(break "~a~%~a~%~a~%~a" s1 s2 s3 tootbird)
-              (!v+ a-point (point-a s1) (point-a s2))
-              (nv+ a-point (point-a s3))
-              (nv* a-point 0.33333334f0)
-              (!v+ b-point (point-b s1) (point-b s2))
-              (nv+ b-point (point-b s3))
-              (nv* b-point 0.33333333f0)))))
-        (v<- (trial:hit-location hit) a-point)
-        (v<- (trial:hit-normal hit) b-point)
-        (nv- (trial:hit-normal hit) a-point)
-        (setf (trial:hit-depth hit) (vlength (trial:hit-normal hit)))
-        #++(when (> (trial:hit-depth hit) 1)
-             (break "~s ~s~%~a~%~a~%~a" foo (trial:hit-depth hit) tootbird a b))
-        (cond
-          ((= 0.0 (trial:hit-depth hit))
-           (v<- (trial:hit-normal hit) +vy3+))
-          (T
-           #++(incf (trial:hit-depth hit)
-                    (* 1000 single-float-epsilon (max 1.0 (trial:hit-depth hit))))
-           (nv/ (trial:hit-normal hit) (trial:hit-depth hit)))))
-      (step-trace dim s1 s2 s3)
-      (trace-line (trial:hit-location hit) (v+ (trial:hit-location hit)
-                                               (trial:hit-normal hit))))
-    (format t "depth = ~s~%"(trial:hit-depth hit))
+              (setf l (/ (v. ds dt) l))
+              (!v- ds (point-a s2) (point-a s1))
+              (!v+* a-point (point-a s1) ds l)
+              (!v- ds (point-b s2) (point-b s1))
+              (!v+* b-point (point-b s1) ds l)))))
+        (3
+         (when *trace*
+           (format t "done3:~%  ~a~%  ~a~%  ~a~% ~a~%"
+                   s1 s2 s3 tootbird))
+         (cond
+           ((barycentric s1 s2 s3
+                         ;; not sure if this should be looking for
+                         ;; point close to tootbird or origin?
+                         #++ tootbird (vec3)
+                         p)
+            (nv+* a-point (point-a s1) (vx p))
+            (nv+* a-point (point-a s2) (vy p))
+            (nv+* a-point (point-a s3) (vz p))
+            (nv+* b-point (point-b s1) (vx p))
+            (nv+* b-point (point-b s2) (vy p))
+            (nv+* b-point (point-b s3) (vz p)))
+           (T
+            ;; barycentric failed (not sure if this still happens
+            ;; with it using doubles?). Use tootbird for normal,
+            ;; then pick whichever shape had smaller simplex, and
+            ;; use middle of that simplex as hit location. Using
+            ;; perimeter rather than area since it is pretty common
+            ;; for one of the shapes to be supported by a single
+            ;; edge, so 0 area doesn't indicate smaller region.
+            (let ((p1 (+ (vdistance (point-a s1) (point-a s2))
+                         (vdistance (point-a s2) (point-a s3))
+                         (vdistance (point-a s3) (point-a s1))))
+                  (p2 (+ (vdistance (point-b s1) (point-b s2))
+                         (vdistance (point-b s2) (point-b s3))
+                         (vdistance (point-b s3) (point-b s1)))))
+              (v<- (trial:hit-normal hit) tootbird)
+              (cond
+                ((<= p1 p2)
+                 (!v+ a-point (point-a s1) (point-a s2))
+                 (nv+ a-point (point-a s3))
+                 (nv* a-point 0.33333334f0)
+                 (!v+ b-point a-point tootbird))
+                (T
+                 (!v+ b-point (point-b s1) (point-b s2))
+                 (nv+ b-point (point-b s3))
+                 (nv* b-point 0.33333333f0)
+                 (!v- a-point b-point tootbird))))))))
+      (v<- (trial:hit-location hit) a-point)
+      (v<- (trial:hit-normal hit) b-point)
+      (nv- (trial:hit-normal hit) a-point)
+      (setf (trial:hit-depth hit) (vlength (trial:hit-normal hit)))
+      (if (= 0.0 (trial:hit-depth hit))
+          (v<- (trial:hit-normal hit) +vy3+)
+          (nv/ (trial:hit-normal hit) (trial:hit-depth hit))))
+    (step-trace dim s1 s2 s3)
+    (trace-line (trial:hit-location hit) (v+ (trial:hit-location hit)
+                                             (trial:hit-normal hit)))
     (finish-trace (plusp ret) hit)
     (plusp ret)))
-
-(setf *trace* t)
 
 (defun detect-hits (a b hits start end)
   (declare (type trial:primitive a b))
