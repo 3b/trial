@@ -17,79 +17,6 @@
 (defconstant STTB-ITERATIONS 64)
 (defconstant STTB-TOLERANCE 0.0001)
 
-(defclass md-step ()
-  ((simplex :initarg :simplex :reader simplex)
-   (points :initform (make-array 0 :adjustable t :fill-pointer 0)
-           :reader points)
-   (vectors :initform (make-array 0 :adjustable t :fill-pointer 0)
-            :reader vectors)))
-
-(defclass md-trace ()
-  ((a :reader a :initarg :a)
-   (b :reader b :initarg :b)
-   (mdiff :reader mdiff :initarg :mdiff)
-   (steps :accessor steps :initform (make-array 0 :adjustable t :fill-pointer 0))
-   (hitp :accessor hitp :initform nil)
-   (depth :accessor depth :initform nil)
-   (normal :accessor normal :initform nil)
-   (location :accessor location :initform nil)))
-
-(defvar *trace* nil)
-(defun make-mdiff (a b)
-  ;; just approximate minkowski difference by picking a few k random
-  ;; directions and collecting all the distinct support points
-  (let* ((r (make-hash-table :test 'equalp))
-         (p (point)))
-    (flet ((r () (- (random 2.0) 1.0)))
-      (loop repeat 4000
-            do (setf (gethash (copy-seq
-                               (varr (search-point p (vec3 (r) (r) (r)) a b)))
-                              r)
-                     t)))
-    (let ((v (make-array (* 3 (hash-table-count r))
-                         :element-type 'single-float)))
-      (loop for i from 0 by 3
-            for p being the hash-keys of r
-            do (replace v p :start1 i))
-      (multiple-value-bind (f i)
-          (org.shirakumo.fraf.quickhull:convex-hull v)
-        ;; todo: build a trial:convex-mesh or something?
-        (list f i)))))
-
-(defun start-trace (a b)
-  (make-instance 'md-trace :a a :b b :mdiff (make-mdiff a b)))
-
-(defun finish-trace (hitp hit)
-  (declare (ignorable hit))
-  (when (typep *trace* 'md-trace)
-    (setf (hitp *trace*) hitp)
-    (format t "depth = ~s~%"(trial:hit-depth hit))
-    (when hit
-      (setf (depth *trace*) (trial:hit-depth hit))
-      (setf (normal *trace*) (trial:hit-normal hit))
-      (setf (location *trace*) (trial:hit-location hit)))))
-
-(defun step-trace (d &rest simplex)
-  (when (typep *trace* 'md-trace)
-    ;; list of vectors
-    (vector-push-extend
-     (make-instance 'md-step
-                    :simplex (mapcar 'copy-seq
-                                     (mapcar 'varr (subseq simplex 0 d))))
-     (steps *trace*))))
-
-(defun trace-point (point)
-  (when (typep *trace* 'md-trace)
-    (vector-push-extend (copy-seq (varr point))
-                        (points (alexandria:last-elt (steps *trace*))))))
-
-(defun trace-line (a b)
-  (when (typep *trace* 'md-trace)
-    (vector-push-extend (copy-seq (varr a))
-                        (vectors (alexandria:last-elt (steps *trace*))))
-    (vector-push-extend (copy-seq (varr b))
-                        (vectors (alexandria:last-elt (steps *trace*))))))
-
 (defun update-simplex (dim s0 s1 s2 s3 dir tootbird best)
   ;; returns (values new-dim done-flag new-best)
   (declare (type point s0 s1 s2 s3)
@@ -106,11 +33,7 @@
   ;;  S0 and (unit) normal DIR.
   (unless (zerop best)
     (let ((d (v. s0 dir)))
-      (when *trace*
-        (let ((n (v* dir d)))
-          (format t "d = ~s ~%" d)
-          (trace-point n)
-          (trace-line (vec3 0 0 0) n)))
+      
       ;; If negative, origin is outside Minkowski difference, and we
       ;; are done (unless we want to find closest point, in which case
       ;; keep going, possibly switching to seeking origin instead of
@@ -118,8 +41,6 @@
       ;; tests though, so just exit for now.)
       (cond
         ((minusp d)
-         (when *trace*
-           (format t "d = ~s done1~%" d))
          (return-from update-simplex (values dim -1 d)))
         #++
         ((minusp d)
@@ -134,8 +55,6 @@
          (when (Zerop dim) ;; make sure we have some result
            (p<- s1 s0)
            (setf dim 1))
-         (when *trace*
-           (format t "d = ~s done2~%" d))
          (return-from update-simplex (values dim 1 0.0)))
         ;; if it is closer than best tootbird, project origin onto the
         ;; plane to get new tootbird
@@ -180,26 +99,20 @@
          ;; if new point is too close to one of the old ones, just
          ;; replace that one
          ((= (vsqrlength an) 0.0)
-          (when *trace* (format t "*an ~a~% bn ~a~% cn ~a~%" an bn cn))
           ;; if we see a duplicate while in no-intersection mode, we
           ;; probably won't make any more progress, so return current
           ;; simplex as nearest contact
           (when (zerop best)
-            (when *trace* (format t " best=0, done3a?~%"))
             (return-from update-simplex
               (values dim -1 best)))
           (p<- s1 s0))
          ((= (vsqrlength bn) 0.0)
-          (when *trace* (format t " an ~a~%*bn ~a~% cn ~a~%" an bn cn))
           (when (zerop best)
-            (when *trace* (format t " best=0, done3b?~%"))
             (return-from update-simplex
               (values dim -1 best)))
           (p<- s2 s0))
          ((= (vsqrlength cn) 0.0)
-          (when *trace* (format t " an ~a~% bn ~a~%*cn ~a~%" an bn cn))
           (when (zerop best)
-            (when *trace* (format t " best=0, done3c?~%"))
             (return-from update-simplex
               (values dim -1 best)))
           (p<- s3 s0))
@@ -219,8 +132,6 @@
                  (f (logior (if (plusp da) 1 0)
                             (if (plusp db) 2 0)
                             (if (plusp dc) 4 0))))
-            (when *trace*
-              (format t " ~3,'0b da=~a, db=~a, dc=~a~%" f da db dc))
             (case f
               ((#b001 #b101) ;; in front of a, behind b, replace c
                (p<- s3 s0))
@@ -241,9 +152,6 @@
                            (p<- s1 s0)
                            (p<- s2 s0))
                        (p<- s3 s0)))))))))))
-
-  (step-trace dim s1 s2 s3)
-  (trace-point tootbird)
 
   (flet ((line (a b dir)
            (let* ((m (v- b a))
@@ -299,9 +207,6 @@
            (T
             (!v* p0 n (/ (v. at n) l^2))
             (!v- p0 tootbird p0)))
-         (trace-point p0)
-         (when *trace*
-           (format t "p0=~a~%" p0))
 
          ;; if too flat, just pick best result from 1d test against all edges
          (flet ((flat ()
@@ -321,15 +226,9 @@
                     (loop for j from 0 to 2
                           do (p<- c0 (if (= j 0) s2 s1))
                              (p<- c1 (if (< j 2) s3 s2))
-                             (when *trace*
-                               (format t "j=~s:~% ~a~% ~a~%"
-                                       j c0 c1))
                              (let ((r (line c0 c1 cdir))
                                    (d* (vsqrdistance cdir tootbird)))
                                (declare (type (unsigned-byte 4) r))
-                               (when *trace*
-                                 (format t " -> ~s, ~s(~s)~% ~a~% ~a~%"
-                                         r d* d c0 (when (> r 1) c1)))
                                (when (< d* d)
                                  (setf d d*
                                        best-dim r)
@@ -352,13 +251,9 @@
                     for u of-type single-float = (+ (projected-cross s1 s2 i)
                                                     (projected-cross s2 s3 i)
                                                     (projected-cross s3 s1 i))
-                    when *trace* do (format t "i=~s,u=~s~%" i u)
-                      when (> (abs u) (abs umax))
-                        do (setf umax u
-                                 j i))
-              (when *trace*
-                (format t "j=~s,umax=~s,flat~s~%"
-                        j umax flat))
+                    when (> (abs u) (abs umax))
+                      do (setf umax u
+                               j i))
               ;; and project simplex and point onto that plane, and
               ;; find the support
               (flet ((projected-cross (a b x)
@@ -384,24 +279,6 @@
                                     (minusp c1) (minusp c2) (minusp c3)))))
                   (declare (dynamic-extent c1 c2 c3))
 
-                  (when *trace*
-                    (format t " in=~s c1=~a, c2=~a, c3=~a~%" in c1 c2 c3)
-                    (!v* dir s1 (/ c1 umax))
-                    (!v+* dir dir s2 (/ c2 umax))
-                    (!v+* dir dir s3 (/ c3 umax))
-                    (trace-point dir)
-                    (flet ((pro (v x)
-                             (ecase x
-                               (0 (vec3 0 (vy v) (vz v)))
-                               (1 (vec3 (vx v) 0 (vz v)))
-                               (2 (vec3 (vx v) (vy v) 0)))))
-                      (trace-line (pro s1 j) (pro s2 j))
-                      (trace-line (pro s2 j) (pro s3 j))
-                      (trace-line (pro s3 j) (pro s1 j))
-                      (trace-point (pro p0 j))
-                      (trace-line (pro s1 j) (pro p0 j))
-                      (trace-point (pro s1 j))
-                      (trace-point (pro s2 j))))
                   (cond
                     ;; support is entire triangle
                     (in
@@ -414,22 +291,6 @@
                      ;; todo: only try edges with sign mismatch
                      (flat))))))))))))
   (let ((dist (vsqrdistance dir tootbird)))
-    (when *trace*
-      (format t "== ~s < ~s? ~s~%" dist 1e-4 (< dist 1e-4))
-      (when (< dist 1e-4)
-        (let ((d (* short-float-epsilon
-                    (loop for i below dim
-                          maximize (ecase i
-                                     (0 (vinorm s1))
-                                     (1 (vinorm s2))
-                                     (2 (vinorm s3)))))))
-          (format t "=2 ~s < ~s (~s)? ~s~%" dist d
-                  (loop for i below dim
-                        maximize (ecase i
-                                   (0 (vinorm s1))
-                                   (1 (vinorm s2))
-                                   (2 (vinorm s3))))
-                  (< dist d 1e-4)))))
     (cond
       ;; if tootbird is on simplex, we are done, and simplex is
       ;; face/edge/point of difference (locally) closest to origin
@@ -442,22 +303,16 @@
                      (1 (vinorm s1))
                      (2 (+ (vinorm s1) (vinorm s2)))
                      (3 (+ (vinorm s1) (vinorm s2) (vinorm s3)))))))
-       (when *trace* (format t "done ~s < ~s~%"
-                             (vsqrdistance dir tootbird)
-                             (expt STTB-TOLERANCE 2)))
        (values dim 1 best))
       (T
        ;; otherwise update dir as direction from closest point to
        ;; tootbird
-       (when *trace* (trace-line tootbird dir))
        (!v- dir tootbird dir)
        (nvunit dir)
-       (when *trace* (trace-line (vec3 0) dir))
        ;; return new simplex size and that we aren't done
        (values dim 0 best)))))
 
 (defun %sttb (a b hit)
-  (when *trace* (setf *trace* (start-trace a b)))
   (let ((s0 (point))
         (s1 (point))
         (s2 (point))
@@ -476,28 +331,17 @@
     ;; difference of centers
     (trial:global-location a dir)
     (trial:global-location b s0)
-    (when *trace*
-      (format t "~a - ~a~%" dir s0))
     (!v- dir dir s0)
     (nvunit dir)
-    (when *trace* (format t "dir = ~a~%" dir))
     (when (v~= dir 0.0)
       ;; no initial guess for best direction, just pick something
       (v<- dir +vx3+))
     (loop for i below STTB-ITERATIONS
           do (search-point s0 dir a b)
-             (when *trace*
-               (format t "~s dir: ~a~%" i dir)
-               (loop for i below dim
-                     for x in (list s1 s2 s3)
-                     do (format t "  ~a~%" x))
-               (format t " add ~a~%" s0))
              (setf (values dim ret best-distance)
                    (update-simplex dim s0 s1 s2 s3
                                    dir tootbird
                                    best-distance))
-             (when *trace*
-               (format t "got ~s ~s ~s~% @ ~a~%" dim ret best-distance tootbird))
           while (zerop ret))
 
     (let ((b-point (vec3))
@@ -540,9 +384,6 @@
               (!v- ds (point-b s2) (point-b s1))
               (!v+* b-point (point-b s1) ds l)))))
         (3
-         (when *trace*
-           (format t "done3:~%  ~a~%  ~a~%  ~a~% ~a~%"
-                   s1 s2 s3 tootbird))
          (cond
            ((barycentric s1 s2 s3
                          ;; not sure if this should be looking for
@@ -588,10 +429,6 @@
       (if (= 0.0 (trial:hit-depth hit))
           (v<- (trial:hit-normal hit) +vy3+)
           (nv/ (trial:hit-normal hit) (trial:hit-depth hit))))
-    (step-trace dim s1 s2 s3)
-    (trace-line (trial:hit-location hit) (v+ (trial:hit-location hit)
-                                             (trial:hit-normal hit)))
-    (finish-trace (plusp ret) hit)
     (plusp ret)))
 
 (defun detect-hits (a b hits start end)
@@ -601,7 +438,6 @@
   (declare (optimize speed))
 
   (when (<= end start)
-    (setf *trace* nil)
     (return-from detect-hits start))
   (let ((hit (aref hits start)))
     (prog1
@@ -609,9 +445,8 @@
                (trial:finish-hit hit a b)
                (1+ start))
               (T
-               start))
-      (setf *trace* nil))))
-#++
+               start)))))
 
+#++
 (trial:define-hit-detector (trial:primitive trial:primitive)
   (setf trial:start (detect-hits a b trial:hits trial:start trial:end)))
