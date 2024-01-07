@@ -17,140 +17,164 @@
 (defconstant STTB-ITERATIONS 64)
 (defconstant STTB-TOLERANCE 0.0001)
 
-(defun update-simplex (dim s0 s1 s2 s3 dir tootbird best)
-  ;; returns (values new-dim done-flag new-best)
-  (declare (type point s0 s1 s2 s3)
+
+(defun update-tootbird (s0 dir tootbird best)
+  (declare (type point s0)
            (type vec3 dir tootbird)
            (type single-float best)
-           (type (unsigned-byte 2) dim))
-  ;; update tootbird
+           (optimize speed))
+  ;; update TOOTBIRD with distance BEST for new point S0 in
+  ;; (normalized) direction DIR, return new distance (or BEST if
+  ;; unchanged) and flag indicating if we are done.
 
-  ;;  find signed distance from origin to plane defined by new point
-  ;;  S0 and (unit) normal DIR.
-  (unless (zerop best)
-    (let ((d (v. s0 dir)))
-      ;; If negative, origin is outside Minkowski difference, and we
-      ;; are done (unless we want to find closest point, in which case
-      ;; keep going, possibly switching to seeking origin instead of
-      ;; tootbird. Neither seems to work with current termination
-      ;; tests though, so just exit for now.)
-      (cond
-        ((minusp d)
-         (return-from update-simplex (values dim -1 d)))
-        #++
-        ((minusp d)
-         ;; if we are finding closest point in non-intersecting case,
-         ;; move tootbird to origin and set 'best' to 0 so we stop
-         ;; checking it.
-         (vzero tootbird)
-         (setf best 0.0))
-        ;; if distance is 0, new tootbird is the new point, which is on
-        ;; surface of Minkowski difference, so we are done
-        ((< (abs d) (expt STTB-TOLERANCE 2))
-         (when (Zerop dim) ;; make sure we have some result
-           (p<- s1 s0)
-           (setf dim 1))
-         (return-from update-simplex (values dim 1 0.0)))
-        ;; if it is closer than best tootbird, project origin onto the
-        ;; plane to get new tootbird
-        ((< (abs d) best)
-         (setf best (abs d))
-         (!v* tootbird dir d)))))
+  ;; calculate signed distance from origin to plane
+  (let ((d (v. s0 dir)))
+    (cond
+      ;; If negative, origin is outside Minkowski difference.
+      #++ ;; version for calculating distance between non-intersecting objects
+      ((minusp d)
+       ;; If we are trying to calculate distance between
+       ;; non-intersecting objects, original description suggests just
+       ;; continuing as before, but that doesn't seem to terminate
+       ;; well with this implementation? Alternately, it suggests
+       ;; switching to seeking origin and using a different
+       ;; termination test. Haven't implemented a different test yet,
+       ;; so that doesn't terminate well either
+       ;; set tootbird to origin, and best distance to 0
+       (vzero tootbird)
+       (values 0.0 0))
+      ((minusp d)
+       ;; since we don't handle termination correctly for
+       ;; non-intersecting case yet, just return "no hit"
+       (values 0.0 -1))
+      ;; if distance is 0, origin is the new point, which is on
+      ;; surface of Minkowski difference, so we are done
+      ((< (abs d) (expt STTB-TOLERANCE 2))
+       (values 0.0 1))
+      ;; if new distance is closer than best tootbird, project origin
+      ;; onto the plane to get new tootbird
+      ((< d best)
+       (!v* tootbird dir d)
+       (values d 0))
+      (T
+       ;; no change, keep old value
+       (values best 0)))))
 
-  ;; update simplex
-  (case dim
-    (0
-     (p<- s1 s0)
-     (setf dim 1))
-    (1
-     (when (and (zerop best) (v~= s0 s1))
-       ;; got same point twice in a row while searching for origin, we
-       ;; are done
-       (return-from update-simplex (values dim -1 best)))
-     (p<- s2 s0)
-     (setf dim 2))
-    (2
-     (when (and (zerop best)
-                (or (v~= s0 s1) (v~= s0 s2)))
-       (return-from update-simplex (values dim -1 best)))
-     (p<- s3 s0)
-     (setf dim 3))
-    (3
-     ;; pick new simplex based on planes normal to old simplex and
-     ;; through new vertex and one of old vertices (this could
-     ;; possibly share some calculations with the "point nearest
-     ;; tootbird" calculation below, but one of the s1,s2,s2 are
-     ;; different by then so would take some bookkeeping to
-     ;; determine which parts to keep for a given calculation)
-     (let* ((ab (v- s2 s1))
-            (ac (v- s3 s1))
-            (an (v- s0 s1))
-            (bn (v- s0 s2))
-            (cn (v- s0 s3))
-            (tn (v- s0 tootbird))
-            (n (vec3)))
-       (declare (dynamic-extent ab ac an bn cn n))
+(defun update-simplex (dim s0 s1 s2 s3 tootbird seeking-origin)
+  ;; returns (values new-dim done-flag)
+  (declare (type point s0 s1 s2 s3)
+           (type vec3 tootbird)
+           (type (or T NIL) seeking-origin)
+           (type (unsigned-byte 2) dim)
+           (optimize speed))
+  (let ((ret 0))
+    (case dim
+      ;; for 0 through 2 point simplexes, just add the new point, unless
+      ;; it is too close to an existing point
+      (0
+       (p<- s1 s0)
+       (setf dim 1))
+      (1
        (cond
-         ;; if new point is too close to one of the old ones, just
-         ;; replace that one
-         ((= (vsqrlength an) 0.0)
-          ;; if we see a duplicate while in no-intersection mode, we
-          ;; probably won't make any more progress, so return current
-          ;; simplex as nearest contact
-          (when (zerop best)
-            (return-from update-simplex
-              (values dim -1 best)))
-          (p<- s1 s0))
-         ((= (vsqrlength bn) 0.0)
-          (when (zerop best)
-            (return-from update-simplex
-              (values dim -1 best)))
-          (p<- s2 s0))
-         ((= (vsqrlength cn) 0.0)
-          (when (zerop best)
-            (return-from update-simplex
-              (values dim -1 best)))
-          (p<- s3 s0))
-         ;; otherwise do plane tests to decide which to keep
+         ((v~= s0 s1)
+          (when seeking-origin
+            ;; got same point twice in a row while searching for
+            ;; origin, we are done
+            (setf ret -1)))
          (T
-          (!vc n ac ab)
-          ;; calculate normals of plane perpendicular to old plane, and
-          ;; through new point and one of old points
-          (nvc an n)
-          (nvc bn n)
-          (nvc cn n)
-          ;; then determine which side of each of those planes
-          ;; tootbird is on
-          (let* ((da (v. tn an))
-                 (db (v. tn bn))
-                 (dc (v. tn cn))
-                 (f (logior (if (plusp da) 1 0)
-                            (if (plusp db) 2 0)
-                            (if (plusp dc) 4 0))))
-            (case f
-              ((#b001 #b101) ;; in front of a, behind b, replace c
-               (p<- s3 s0))
-              ((#b010 #b011) ;; in front of b, behind c, replace a
-               (p<- s1 s0))
-              ((#b100 #b110) ;; in front of c, behind a, replace b
-               (p<- s2 s0))
-              ;; ambiguous, pick smallest. Original just picked a
-              ;; specific point in this case, but this seems to work a
-              ;; bit better?
-              ((#b000 #b111)
-               (if (< da db)
-                   (if (< dc da)
-                       (p<- s3 s0)
-                       (p<- s1 s0))
-                   (if (< db dc)
-                       (if (< da dc)
-                           (p<- s1 s0)
-                           (p<- s2 s0))
-                       (p<- s3 s0)))))))))))
+          (p<- s2 s0)
+          (setf dim 2))))
+      (2
+       (cond
+         ((or (v~= s0 s1) (v~= s0 s2))
+          (when seeking-origin
+            (setf ret -1)))
+         (T
+          (p<- s3 s0)
+          (setf dim 3))))
+      ;; If we already have 3 points, try to pick the new triangle
+      ;; closest to containing the (projection of the) tootbird.
+      ;; First, find normal of a plane perpendicular to the old
+      ;; triangle, and passing through the new point and one of the
+      ;; old points. Use that to determine which side of each of those
+      ;; planes contains the tootbird. If it isn't on the same side of
+      ;; all 3 planes, we can directly determine which point to
+      ;; replace. If it is on the same side as all 3, replace
+      ;; whichever has the lowest distance (original just picked an
+      ;; arbitrary point to replace, but this seems to work better?).
+      (3
+       (cond
+         ;; if same as an existing point, just ignore it (possibly
+         ;; should replace this with 'if it is close to existing
+         ;; point, replace it'?)
+         ((or (v= s0 s1) (v= s0 s2) (v= s0 s3))
+          (when seeking-origin
+            ;; if we repeated a point, we are done. (We frequently get
+            ;; longer loops though, so this isn't enough of a test to
+            ;; make origin-seeking actually work by itself.)
+            (setf ret -1)))
+         (T
+          (let* ((ab (v- s2 s1))
+                 (ac (v- s3 s1))
+                 (an (v- s0 s1))
+                 (bn (v- s0 s2))
+                 (cn (v- s0 s3))
+                 (tn (v- s0 tootbird))
+                 (n (vec3)))
+            (declare (dynamic-extent ab ac an bn cn n))
+            ;; normal of old triangle
+            (!vc n ac ab)
+            ;; normals of planes through new point
+            (nvc an n)
+            (nvc bn n)
+            (nvc cn n)
+            ;; determine which side of each of those planes tootbird
+            ;; is on
+            (let* ((da (v. tn an))
+                   (db (v. tn bn))
+                   (dc (v. tn cn))
+                   (f (logior (if (plusp da) 1 0)
+                              (if (plusp db) 2 0)
+                              (if (plusp dc) 4 0))))
+              (case f
+                ((#b001 #b101) ;; in front of a, behind b, replace c
+                 (p<- s3 s0))
+                ((#b010 #b011) ;; in front of b, behind c, replace a
+                 (p<- s1 s0))
+                ((#b100 #b110) ;; in front of c, behind a, replace b
+                 (p<- s2 s0))
+                ;; ambiguous, pick lowest distance (signed, so -2 is
+                ;; lower than -1)
+                ((#b000 #b111)
+                 (if (< da db)
+                     (if (< dc da)
+                         (p<- s3 s0)
+                         (p<- s1 s0))
+                     (if (< db dc)
+                         (if (< da dc)
+                             (p<- s1 s0)
+                             (p<- s2 s0))
+                         (p<- s3 s0)))))))))))
+    (values dim ret)))
 
-  (flet ((line (a b dir)
+;;; triangle case based on "Improving the GJK algorithm for faster and
+;;; more reliable distance queries between convex objects." by Mattia
+;;; Montanari, Nik Petrinic, and Ettore Barbieri. 2017.
+;;; ACM Trans. Graph. 36, 3, Article 30 (June 2017)
+;;; DOI: http://dx.doi.org/10.1145/3083724
+(defun nearest-point-on-simplex (dim s1 s2 s3 target dest)
+  ;; Find point on simplex S1[,S2[,S3]] (with DIM points) nearest to
+  ;; TARGET, and return it in DEST. Updates S1[,S2[,S3]] to contain
+  ;; new simplex supporting that point, and returns size of new
+  ;; simplex.
+  (declare (type point s1 s2 s3)
+           (type vec3 dest target)
+           (type (unsigned-byte 2) dim)
+           (optimize speed))
+
+  (flet ((line (a b d)
            (let* ((m (v- b a))
-                  (dt (v- tootbird a))
+                  (dt (v- target a))
                   (mm (v. m m)))
              (declare (dynamic-extent m dt))
              (cond
@@ -158,32 +182,32 @@
                 ;; degenerate, treat as 1 point (keep newer, in hopes it
                 ;; works better next pass)
                 (p<- a b)
-                (v<- dir a)
+                (v<- d a)
                 1)
                (T
                 (let* ((t0 (/ (v. m dt) mm)))
                   (cond
                     ((<= t0 0)
-                     (v<- dir a)
+                     (v<- d a)
                      1)
                     ((<= 1 t0)
-                     (v<- dir b)
+                     (v<- d b)
                      (p<- a b)
                      1)
                     (T
-                     (!v+* dir a m t0)
+                     (!v+* d a m t0)
                      2))))))))
-    ;; find point on simplex nearest to tootbird (store it in dir)
+
     (case dim
       (1
        ;; if only 1 point, that is closest point
-       (v<- dir s1))
+       (v<- dest s1))
       (2
-       (setf dim (line s1 s2 dir)))
+       (setf dim (line s1 s2 dest)))
       (3
        (let* ((ab (v- s2 s1))
               (ac (v- s3 s1))
-              (at (v- tootbird s1))
+              (at (v- target s1))
               (n (vec3))
               (l^2 0.0)
               (p0 (vec3))
@@ -201,47 +225,51 @@
             (setf flat T))
            (T
             (!v* p0 n (/ (v. at n) l^2))
-            (!v- p0 tootbird p0)))
+            (!v- p0 target p0)))
 
-         ;; if too flat, just pick best result from 1d test against all edges
-         (flet ((flat ()
+         (flet ((flat (edges)
                   (let ((d MOST-POSITIVE-SINGLE-FLOAT)
                         ;; best result seen so far
                         (best-dim 0)
-                        (best-dir (vec3))
+                        (best-point (vec3))
                         (b0 (point))
                         (b1 (point))
                         ;; temp space used by each LINE call
-                        (cdir (vec3))
+                        (point (vec3))
                         (c0 (point))
                         (c1 (point)))
-                    (declare (dynamic-extent best-dir
+                    (declare (dynamic-extent best-point
                                              b0 b1
-                                             cdir c0 c1))
+                                             point c0 c1))
                     (loop for j from 0 to 2
-                          do (p<- c0 (if (= j 0) s2 s1))
-                             (p<- c1 (if (< j 2) s3 s2))
-                             (let ((r (line c0 c1 cdir))
-                                   (d* (vsqrdistance cdir tootbird)))
-                               (declare (type (unsigned-byte 4) r))
-                               (when (< d* d)
-                                 (setf d d*
-                                       best-dim r)
-                                 (v<- best-dir cdir)
-                                 (p<- b0 c0)
-                                 (when (< 1 r) (p<- b1 c1)))))
+                          when (logbitp j edges)
+                            do (p<- c0 (if (= j 0) s2 s1))
+                               (p<- c1 (if (< j 2) s3 s2))
+                               (let ((r (line c0 c1 point))
+                                     (d* (vsqrdistance point target)))
+                                 (declare (type (unsigned-byte 4) r))
+                                 (when (< d* d)
+                                   (setf d d*
+                                         best-dim r)
+                                   (v<- best-point point)
+                                   (p<- b0 c0)
+                                   (when (< 1 r) (p<- b1 c1)))))
                     ;; should always find a solution
                     (assert (/= d MOST-POSITIVE-SINGLE-FLOAT))
                     ;; copy results to output
-                    (v<- dir best-dir)
+                    (v<- dest best-point)
                     (p<- s1 b0)
                     (when (< 1 best-dim) (p<- s2 b1))
                     (setf dim best-dim))))
            (cond
+             ;; if too flat, just try all edges and pick the best
+             ;; result from those
              (flat
-              (flat))
+              (flat #b111))
+             ;; normal case
              (T
-              ;; otherwise pick axis-aligned plane with largest projection
+              ;; pick axis-aligned plane with largest projection of
+              ;; simplex
               (loop for i below 3
                     for u of-type single-float = (+ (projected-cross s1 s2 i)
                                                     (projected-cross s2 s3 i)
@@ -268,23 +296,50 @@
                        (c2 (+ (projected-cross p0 s3 j)
                               (projected-cross s3 s1 j)
                               (projected-cross s1 p0 j)))
-                       (in (or (and (plusp umax)
-                                    (plusp c1) (plusp c2) (plusp c3))
-                               (and (minusp umax)
-                                    (minusp c1) (minusp c2) (minusp c3)))))
+                       ;; figure out which values have same sign as
+                       ;; umax (0 for either counts as not matching,
+                       ;; and we will have to check the edge)
+                       (flags (cond
+                                ((plusp umax)
+                                 (logior (if (plusp c1) 0 1)
+                                         (if (plusp c2) 0 2)
+                                         (if (plusp c3) 0 4)))
+                                ((minusp umax)
+                                 (logior (if (minusp c1) 0 1)
+                                         (if (minusp c2) 0 2)
+                                         (if (minusp c3) 0 4)
+                                         ))
+                                (T #b111)))
+                       (in (= flags 0)))
                   (declare (dynamic-extent c1 c2 c3))
-
                   (cond
                     ;; support is entire triangle
                     (in
-                     (!v* dir s1 (/ c1 umax))
-                     (!v+* dir dir s2 (/ c2 umax))
-                     (!v+* dir dir s3 (/ c3 umax))
+                     (!v* dest s1 (/ c1 umax))
+                     (!v+* dest dest s2 (/ c2 umax))
+                     (!v+* dest dest s3 (/ c3 umax))
                      3)
                     ;; otherwise, try edges and pick best
                     (T
-                     ;; todo: only try edges with sign mismatch
-                     (flat))))))))))))
+                     (flat flags))))))))))))
+  dim)
+
+(defun update-dir (dim s1 s2 s3 dir tootbird seeking-origin)
+  ;; find next search direction and determine if we are done. Returns
+  ;; (values new-dim done-flag), updates simplex in S1-S3, and updates
+  ;; DIR.
+  (declare (type point s1 s2 s3)
+           (type vec3 dir tootbird)
+           (type (or T NIL) seeking-origin)
+           ;; don't have a good termination test for this case yet, so
+           ;; not actually used.
+           (ignorable seeking-origin)
+           (type (unsigned-byte 2) dim)
+           (optimize speed))
+  ;; find point on simplex closest to tootbird, and store it in DIR
+  ;; (and update simplex to subset that supports that point)
+  (setf dim (nearest-point-on-simplex dim s1 s2 s3 tootbird dir))
+  ;; is tootbird on simplex?
   (let ((dist (vsqrdistance dir tootbird)))
     (cond
       ;; if tootbird is on simplex, we are done, and simplex is
@@ -298,14 +353,15 @@
                      (1 (vinorm s1))
                      (2 (+ (vinorm s1) (vinorm s2)))
                      (3 (+ (vinorm s1) (vinorm s2) (vinorm s3)))))))
-       (values dim 1 best))
+       ;; return new simplex and that we are done
+       (values dim 1))
       (T
        ;; otherwise update dir as direction from closest point to
        ;; tootbird
        (!v- dir tootbird dir)
        (nvunit dir)
        ;; return new simplex size and that we aren't done
-       (values dim 0 best)))))
+       (values dim 0)))))
 
 (defun %sttb (a b hit)
   (let ((s0 (point))
@@ -320,6 +376,7 @@
     (declare (dynamic-extent s0 s1 s2 s3 dir tootbird)
              (type (unsigned-byte 2) dim)
              (type (signed-byte 2) ret)
+             (type single-float best-distance)
              (optimize speed))
     ;; website suggests "direction from center of Minkowski difference
     ;; to origin" as first direction, so approximate that with
@@ -333,10 +390,15 @@
       (v<- dir +vx3+))
     (loop for i below STTB-ITERATIONS
           do (search-point s0 dir a b)
-             (setf (values dim ret best-distance)
-                   (update-simplex dim s0 s1 s2 s3
-                                   dir tootbird
-                                   best-distance))
+             (setf (values best-distance ret)
+                   (update-tootbird s0 dir tootbird best-distance))
+          while (zerop ret)
+          do (setf dim
+                   (update-simplex dim s0 s1 s2 s3 tootbird
+                                   (zerop best-distance)))
+             (setf (values dim ret)
+                   (update-dir dim s1 s2 s3 dir tootbird
+                               (zerop best-distance)))
           while (zerop ret))
 
     (let ((b-point (vec3))
