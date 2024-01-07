@@ -298,7 +298,7 @@
         ;; coarse test against fixed distance
         (< dist 1e-4)
         ;; then test against epsilon based on size of simplex
-        (< dist (* 2 short-float-epsilon
+        (< dist (* 2 SINGLE-FLOAT-EPSILON
                    (ecase dim
                      (1 (vinorm s1))
                      (2 (+ (vinorm s1) (vinorm s2)))
