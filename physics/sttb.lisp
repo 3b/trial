@@ -33,7 +33,6 @@
   ;;  S0 and (unit) normal DIR.
   (unless (zerop best)
     (let ((d (v. s0 dir)))
-      
       ;; If negative, origin is outside Minkowski difference, and we
       ;; are done (unless we want to find closest point, in which case
       ;; keep going, possibly switching to seeking origin instead of
@@ -234,13 +233,13 @@
                                        best-dim r)
                                  (v<- best-dir cdir)
                                  (p<- b0 c0)
-                                 (when (> r 1) (p<- b1 c1)))))
+                                 (when (< 1 r) (p<- b1 c1)))))
                     ;; should always find a solution
                     (assert (/= d MOST-POSITIVE-SINGLE-FLOAT))
                     ;; copy results to output
                     (v<- dir best-dir)
                     (p<- s1 b0)
-                    (when (> best-dim 1) (p<- s2 b1))
+                    (when (< 1 best-dim) (p<- s2 b1))
                     (setf dim best-dim))))
            (cond
              (flat
@@ -251,7 +250,7 @@
                     for u of-type single-float = (+ (projected-cross s1 s2 i)
                                                     (projected-cross s2 s3 i)
                                                     (projected-cross s3 s1 i))
-                    when (> (abs u) (abs umax))
+                    when (< (abs umax) (abs u))
                       do (setf umax u
                                j i))
               ;; and project simplex and point onto that plane, and
