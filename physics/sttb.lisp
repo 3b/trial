@@ -23,10 +23,6 @@
            (type vec3 dir tootbird)
            (type single-float best)
            (type (unsigned-byte 2) dim))
-  (step-trace dim s1 s2 s3)
-  (trace-line (vec3) dir)
-  (trace-point tootbird)
-  (trace-point s0)
   ;; update tootbird
 
   ;;  find signed distance from origin to plane defined by new point
